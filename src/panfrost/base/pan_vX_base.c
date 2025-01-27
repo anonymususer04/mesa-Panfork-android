@@ -500,6 +500,7 @@ static struct kbase_op kbase_main[] = {
         { mmap_tracking, munmap_tracking, "Map tracking handle" },
 #if PAN_BASE_API == 0
         { set_flags, NULL, "Set flags" },
+        { init_mem_exec, NULL, "Initialise EXEC_VA zone" },
 #endif
         { get_gpuprops, free_gpuprops, "Get GPU properties" },
 #if PAN_BASE_API >= 2
@@ -511,6 +512,7 @@ static struct kbase_op kbase_main[] = {
 #endif
 #if PAN_BASE_API >= 2
         { alloc_event_mem, free_event_mem, "Allocate event memory" },
+        { init_mem_jit, NULL, "Initialise JIT allocator" },
 #endif
 };
 
