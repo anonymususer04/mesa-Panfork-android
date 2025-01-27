@@ -13,8 +13,8 @@
 
 ```
 
-git clone -b Panfrost-G610 --depth 1 https://github.com/Saikatsaha1996/mesa-Panfrost-G610
-cd mesa-Panfrost-G610
+git clone -b Panfork-kbase --depth 1 https://github.com/anonymususer04/mesa-Panfork-android
+cd mesa-Panfork-android
 mkdir build
 cd build
 
