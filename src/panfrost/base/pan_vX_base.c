@@ -517,7 +517,6 @@ static struct kbase_op kbase_main[] = {
         { mmap_tracking, munmap_tracking, "Map tracking handle" },
 #if PAN_BASE_API == 0
         { set_flags, NULL, "Set flags" },
-        { init_mem_exec, NULL, "Initialise EXEC_VA zone" },
 #endif
         { get_gpuprops, free_gpuprops, "Get GPU properties" },
 #if PAN_BASE_API >= 2
