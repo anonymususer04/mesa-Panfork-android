@@ -129,23 +129,6 @@ kbase_ioctl(int fd, unsigned long request, ...)
                 return 0;
         }
 }
-
-static bool
-init_mem_exec(kbase k)
-{
-        struct kbase_ioctl_mem_exec_init init = {
-                .va_pages = 0x100000,
-        };
-
-        int ret = kbase_ioctl(k->fd, KBASE_IOCTL_MEM_EXEC_INIT, &init);
-
-        if (ret == -1) {
-                perror("ioctl(KBASE_IOCTL_MEM_EXEC_INIT)");
-                return false;
-        }
-        return true;
-}
-
 #endif
 
 #if PAN_BASE_API >= 1
