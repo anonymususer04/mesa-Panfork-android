@@ -354,7 +354,7 @@ init_mem_jit(kbase k)
         }
         return true;
 }
-#endif
+
 
 #if PAN_BASE_API >= 2
 static struct base_ptr
