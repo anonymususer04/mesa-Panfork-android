@@ -503,8 +503,7 @@ static struct kbase_op kbase_main[] = {
 #endif
         { get_gpuprops, free_gpuprops, "Get GPU properties" },
 #if PAN_BASE_API >= 2
-        { mmap_user_reg, munmap_user_reg, "Map user register page" },
-        { init_mem_jit, NULL, "Initialise JIT allocator" },
+        { mmap_user_reg, munmap_user_reg, "Map user register page" },        
 #endif
 #if PAN_BASE_API >= 1
         { init_mem_exec, NULL, "Initialise EXEC_VA zone" },
