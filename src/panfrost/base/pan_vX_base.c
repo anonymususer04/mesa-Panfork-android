@@ -331,6 +331,8 @@ init_mem_exec(kbase k)
         }
         return true;
 }
+#endif
+
 static bool
 init_mem_jit(kbase k)
 {
