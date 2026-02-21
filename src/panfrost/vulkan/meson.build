@@ -118,6 +118,7 @@ libvulkan_panfrost = shared_library(
     libpanfrost_decode,
     libpanfrost_lib,
     libpanfrost_util,
+    libpanfrost_base,
   ],
   dependencies : [
     dep_dl,

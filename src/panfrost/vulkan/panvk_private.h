@@ -239,6 +239,10 @@ struct panvk_queue {
    struct vk_queue vk;
    struct panvk_device *device;
    uint32_t sync;
+/* Sync obj used to keep track of in-flight jobs. */
+        uint32_t syncobj;
+        struct kbase_syncobj *syncobj_kbase;
+        struct kbase_context *kbase_ctx;
 };
 
 struct panvk_device {
@@ -787,6 +791,8 @@ panvk_pack_color(struct panvk_clear_value *out,
 struct panvk_event {
    struct vk_object_base base;
    uint32_t syncobj;
+   struct kbase_syncobj *syncobj_kbase;
+   struct kbase_context *kbase_ctx;
 };
 
 struct panvk_shader {

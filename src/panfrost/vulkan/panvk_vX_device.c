@@ -27,6 +27,7 @@
  */
 
 #include "genxml/gen_macros.h"
+#include "util/macros.h"
 
 #include "decode.h"
 
@@ -34,6 +35,32 @@
 #include "panvk_cs.h"
 
 #include "vk_drm_syncobj.h"
+
+static int
+panvk_submit_kbase_batch(struct panfrost_device *pdev,
+                         mali_ptr jc,
+                         uint32_t requirements,
+                         struct kbase_syncobj *syncobj,
+                         uint32_t *bos,
+                         unsigned nr_bos)
+{
+
+   pdev->mali.handle_events(&pdev->mali);
+
+   int atom = pdev->mali.submit(&pdev->mali,
+                        jc,
+                        requirements,
+                        syncobj,
+                        (int32_t *)bos,
+                        nr_bos);
+
+   if (atom < 0) {
+      errno = EINVAL;
+      return -1;
+   }
+
+   return 0;
+}
 
 static void
 panvk_queue_submit_batch(struct panvk_queue *queue,
@@ -44,72 +71,65 @@ panvk_queue_submit_batch(struct panvk_queue *queue,
 {
    const struct panvk_device *dev = queue->device;
    unsigned debug = dev->physical_device->instance->debug_flags;
-   const struct panfrost_device *pdev = &dev->physical_device->pdev;
+   struct panfrost_device *pdev =
+      (struct panfrost_device *)&dev->physical_device->pdev;
+
+
    int ret;
 
-   /* Reset the batch if it's already been issued */
    if (batch->issued) {
       util_dynarray_foreach(&batch->jobs, void *, job)
          memset((*job), 0, 4 * 4);
 
-      /* Reset the tiler before re-issuing the batch */
       if (batch->tiler.descs.cpu) {
-         memcpy(batch->tiler.descs.cpu, batch->tiler.templ,
-                pan_size(TILER_CONTEXT) + pan_size(TILER_HEAP));
+         memcpy(batch->tiler.descs.cpu,
+                batch->tiler.templ,
+                pan_size(TILER_CONTEXT) +
+                pan_size(TILER_HEAP));
       }
    }
 
    if (batch->scoreboard.first_job) {
-      struct drm_panfrost_submit submit = {
-         .bo_handles = (uintptr_t)bos,
-         .bo_handle_count = nr_bos,
-         .in_syncs = (uintptr_t)in_fences,
-         .in_sync_count = nr_in_fences,
-         .out_sync = queue->sync,
-         .jc = batch->scoreboard.first_job,
-      };
 
-      ret = drmIoctl(pdev->fd, DRM_IOCTL_PANFROST_SUBMIT, &submit);
+      ret = panvk_submit_kbase_batch(pdev,
+                                     batch->scoreboard.first_job,
+                                     0,
+                                     queue->syncobj_kbase,
+                                     bos,
+                                     nr_bos);
+
       assert(!ret);
 
       if (debug & (PANVK_DEBUG_TRACE | PANVK_DEBUG_SYNC)) {
-         ret = drmSyncobjWait(pdev->fd, &submit.out_sync, 1, INT64_MAX, 0, NULL);
-         assert(!ret);
+         pdev->mali.syncobj_wait(&pdev->mali, queue->syncobj_kbase);
       }
 
       if (debug & PANVK_DEBUG_TRACE)
-         GENX(pandecode_jc)(batch->scoreboard.first_job, pdev->gpu_id);
-      
+         GENX(pandecode_jc)(batch->scoreboard.first_job,
+                            pdev->gpu_id);
+
       if (debug & PANVK_DEBUG_DUMP)
          pandecode_dump_mappings();
    }
 
    if (batch->fragment_job) {
-      struct drm_panfrost_submit submit = {
-         .bo_handles = (uintptr_t)bos,
-         .bo_handle_count = nr_bos,
-         .out_sync = queue->sync,
-         .jc = batch->fragment_job,
-         .requirements = PANFROST_JD_REQ_FS,
-      };
 
-      if (batch->scoreboard.first_job) {
-         submit.in_syncs = (uintptr_t)(&queue->sync);
-         submit.in_sync_count = 1;
-      } else {
-         submit.in_syncs = (uintptr_t)in_fences;
-         submit.in_sync_count = nr_in_fences;
-      }
+      ret = panvk_submit_kbase_batch(pdev,
+                                     batch->fragment_job,
+                                     PANFROST_JD_REQ_FS,
+                                     queue->syncobj_kbase,
+                                     bos,
+                                     nr_bos);
 
-      ret = drmIoctl(pdev->fd, DRM_IOCTL_PANFROST_SUBMIT, &submit);
       assert(!ret);
+
       if (debug & (PANVK_DEBUG_TRACE | PANVK_DEBUG_SYNC)) {
-         ret = drmSyncobjWait(pdev->fd, &submit.out_sync, 1, INT64_MAX, 0, NULL);
-         assert(!ret);
+         pdev->mali.syncobj_wait(&pdev->mali, queue->syncobj_kbase);
       }
 
       if (debug & PANVK_DEBUG_TRACE)
-         GENX(pandecode_jc)(batch->fragment_job, pdev->gpu_id);
+         GENX(pandecode_jc)(batch->fragment_job,
+                            pdev->gpu_id);
 
       if (debug & PANVK_DEBUG_DUMP)
          pandecode_dump_mappings();
@@ -122,76 +142,64 @@ panvk_queue_submit_batch(struct panvk_queue *queue,
 }
 
 static void
-panvk_queue_transfer_sync(struct panvk_queue *queue, uint32_t syncobj)
+panvk_queue_transfer_sync(struct panvk_queue *queue,
+                          struct kbase_syncobj **dst)
 {
-   const struct panfrost_device *pdev = &queue->device->physical_device->pdev;
-   int ret;
+   struct panfrost_device *pdev =
+      (struct panfrost_device *)&queue->device->physical_device->pdev;
 
-   struct drm_syncobj_handle handle = {
-      .handle = queue->sync,
-      .flags = DRM_SYNCOBJ_HANDLE_TO_FD_FLAGS_EXPORT_SYNC_FILE,
-      .fd = -1,
-   };
-
-   ret = drmIoctl(pdev->fd, DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD, &handle);
-   assert(!ret);
-   assert(handle.fd >= 0);
-
-   handle.handle = syncobj;
-   ret = drmIoctl(pdev->fd, DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE, &handle);
-   assert(!ret);
-
-   close(handle.fd);
+   *dst = pdev->mali.syncobj_dup(&pdev->mali,
+                                 queue->syncobj_kbase);
 }
 
 static void
-panvk_add_wait_event_syncobjs(struct panvk_batch *batch, uint32_t *in_fences, unsigned *nr_in_fences)
+panvk_add_wait_event_syncobjs(struct panvk_batch *batch,
+                              struct kbase_syncobj **waits,
+                              unsigned *nr_waits)
 {
-   util_dynarray_foreach(&batch->event_ops, struct panvk_event_op, op) {
-      switch (op->type) {
-      case PANVK_EVENT_OP_SET:
-         /* Nothing to do yet */
-         break;
-      case PANVK_EVENT_OP_RESET:
-         /* Nothing to do yet */
-         break;
-      case PANVK_EVENT_OP_WAIT:
-         in_fences[(*nr_in_fences)++] = op->event->syncobj;
-         break;
-      default:
-         unreachable("bad panvk_event_op type\n");
+   util_dynarray_foreach(&batch->event_ops,
+                         struct panvk_event_op,
+                         op) {
+
+      if (op->type == PANVK_EVENT_OP_WAIT) {
+         waits[(*nr_waits)++] = op->event->syncobj_kbase;
       }
    }
 }
 
 static void
-panvk_signal_event_syncobjs(struct panvk_queue *queue, struct panvk_batch *batch)
+panvk_signal_event_syncobjs(struct panvk_queue *queue,
+                            struct panvk_batch *batch)
 {
-   const struct panfrost_device *pdev = &queue->device->physical_device->pdev;
+   struct panfrost_device *pdev =
+      (struct panfrost_device *)&queue->device->physical_device->pdev;
 
-   util_dynarray_foreach(&batch->event_ops, struct panvk_event_op, op) {
+   util_dynarray_foreach(&batch->event_ops,
+                         struct panvk_event_op,
+                         op) {
+
       switch (op->type) {
-      case PANVK_EVENT_OP_SET: {
-         panvk_queue_transfer_sync(queue, op->event->syncobj);
-         break;
-      }
-      case PANVK_EVENT_OP_RESET: {
-         struct panvk_event *event = op->event;
 
-         struct drm_syncobj_array objs = {
-            .handles = (uint64_t) (uintptr_t) &event->syncobj,
-            .count_handles = 1
-         };
+      case PANVK_EVENT_OP_SET:
+         /* evento recebe cópia do sync da queue */
+         op->event->syncobj_kbase =
+            pdev->mali.syncobj_dup(&pdev->mali,
+                                   queue->syncobj_kbase);
+         break;
 
-         int ret = drmIoctl(pdev->fd, DRM_IOCTL_SYNCOBJ_RESET, &objs);
-         assert(!ret);
+      case PANVK_EVENT_OP_RESET:
+         /* destrói o sync antigo */
+         if (op->event->syncobj_kbase)
+            pdev->mali.syncobj_destroy(&pdev->mali,
+                                       op->event->syncobj_kbase);
+
+         /* cria um novo sync limpo */
+         op->event->syncobj_kbase =
+            pdev->mali.syncobj_create(&pdev->mali);
          break;
-      }
-      case PANVK_EVENT_OP_WAIT:
-         /* Nothing left to do */
-         break;
+
       default:
-         unreachable("bad panvk_event_op type\n");
+         break;
       }
    }
 }
@@ -202,49 +210,65 @@ panvk_per_arch(queue_submit)(struct vk_queue *vk_queue,
 {
    struct panvk_queue *queue =
       container_of(vk_queue, struct panvk_queue, vk);
-   const struct panfrost_device *pdev = &queue->device->physical_device->pdev;
 
-   unsigned nr_semaphores = submit->wait_count + 1;
-   uint32_t semaphores[nr_semaphores];
+   struct panvk_device *dev = queue->device;
+   struct panfrost_device *pdev =
+      (struct panfrost_device *)&dev->physical_device->pdev;
 
-   semaphores[0] = queue->sync;
-   for (unsigned i = 0; i < submit->wait_count; i++) {
-      assert(vk_sync_type_is_drm_syncobj(submit->waits[i].sync->type));
-      struct vk_drm_syncobj *syncobj =
-         vk_sync_as_drm_syncobj(submit->waits[i].sync);
+   unsigned nr_semaphores = submit->wait_count;
 
-      semaphores[i + 1] = syncobj->syncobj;
-   }
+  for (unsigned i = 0; i < submit->wait_count; i++) {
+    struct kbase_syncobj *syncobj = queue->syncobj_kbase;
+    pdev->mali.syncobj_wait(&pdev->mali, syncobj);
+}
 
-   for (uint32_t j = 0; j < submit->command_buffer_count; ++j) {
+   for (uint32_t j = 0;
+        j < submit->command_buffer_count;
+        ++j) {
+
       struct panvk_cmd_buffer *cmdbuf =
-         container_of(submit->command_buffers[j], struct panvk_cmd_buffer, vk);
+         container_of(submit->command_buffers[j],
+                      struct panvk_cmd_buffer,
+                      vk);
 
-      list_for_each_entry(struct panvk_batch, batch, &cmdbuf->batches, node) {
-         /* FIXME: should be done at the batch level */
+      list_for_each_entry(struct panvk_batch,
+                          batch,
+                          &cmdbuf->batches,
+                          node) {
+
          unsigned nr_bos =
             panvk_pool_num_bos(&cmdbuf->desc_pool) +
             panvk_pool_num_bos(&cmdbuf->varying_pool) +
             panvk_pool_num_bos(&cmdbuf->tls_pool) +
-            (batch->fb.info ? batch->fb.info->attachment_count : 0) +
+            (batch->fb.info ?
+               batch->fb.info->attachment_count : 0) +
             (batch->blit.src ? 1 : 0) +
             (batch->blit.dst ? 1 : 0) +
             (batch->scoreboard.first_tiler ? 1 : 0) + 1;
+
          unsigned bo_idx = 0;
          uint32_t bos[nr_bos];
 
-         panvk_pool_get_bo_handles(&cmdbuf->desc_pool, &bos[bo_idx]);
+         panvk_pool_get_bo_handles(&cmdbuf->desc_pool,
+                                   &bos[bo_idx]);
          bo_idx += panvk_pool_num_bos(&cmdbuf->desc_pool);
 
-         panvk_pool_get_bo_handles(&cmdbuf->varying_pool, &bos[bo_idx]);
+         panvk_pool_get_bo_handles(&cmdbuf->varying_pool,
+                                   &bos[bo_idx]);
          bo_idx += panvk_pool_num_bos(&cmdbuf->varying_pool);
 
-         panvk_pool_get_bo_handles(&cmdbuf->tls_pool, &bos[bo_idx]);
+         panvk_pool_get_bo_handles(&cmdbuf->tls_pool,
+                                   &bos[bo_idx]);
          bo_idx += panvk_pool_num_bos(&cmdbuf->tls_pool);
 
          if (batch->fb.info) {
-            for (unsigned i = 0; i < batch->fb.info->attachment_count; i++) {
-               bos[bo_idx++] = batch->fb.info->attachments[i].iview->pview.image->data.bo->gem_handle;
+            for (unsigned i = 0;
+                 i < batch->fb.info->attachment_count;
+                 i++) {
+
+               bos[bo_idx++] =
+                  batch->fb.info->attachments[i]
+                  .iview->pview.image->data.bo->gem_handle;
             }
          }
 
@@ -258,11 +282,11 @@ panvk_per_arch(queue_submit)(struct vk_queue *vk_queue,
             bos[bo_idx++] = pdev->tiler_heap->gem_handle;
 
          bos[bo_idx++] = pdev->sample_positions->gem_handle;
+
          assert(bo_idx == nr_bos);
 
-         /* Merge identical BO entries. */
          for (unsigned x = 0; x < nr_bos; x++) {
-            for (unsigned y = x + 1; y < nr_bos; ) {
+            for (unsigned y = x + 1; y < nr_bos;) {
                if (bos[x] == bos[y])
                   bos[y] = bos[--nr_bos];
                else
@@ -270,30 +294,25 @@ panvk_per_arch(queue_submit)(struct vk_queue *vk_queue,
             }
          }
 
-         unsigned nr_in_fences = 0;
-         unsigned max_wait_event_syncobjs =
-            util_dynarray_num_elements(&batch->event_ops,
-                                       struct panvk_event_op);
-         uint32_t in_fences[nr_semaphores + max_wait_event_syncobjs];
-         memcpy(in_fences, semaphores, nr_semaphores * sizeof(*in_fences));
-         nr_in_fences += nr_semaphores;
-
-         panvk_add_wait_event_syncobjs(batch, in_fences, &nr_in_fences);
-
-         panvk_queue_submit_batch(queue, batch, bos, nr_bos, in_fences, nr_in_fences);
+         panvk_queue_submit_batch(queue,
+                                   batch,
+                                   bos,
+                                   nr_bos,
+                                   NULL,
+                                   0);
 
          panvk_signal_event_syncobjs(queue, batch);
       }
    }
 
-   /* Transfer the out fence to signal semaphores */
    for (unsigned i = 0; i < submit->signal_count; i++) {
-      assert(vk_sync_type_is_drm_syncobj(submit->signals[i].sync->type));
-      struct vk_drm_syncobj *syncobj =
-         vk_sync_as_drm_syncobj(submit->signals[i].sync);
+        submit->signals[i].sync;
 
-      panvk_queue_transfer_sync(queue, syncobj->syncobj);
-   }
+   pdev->mali.syncobj_dup(&pdev->mali,
+                       queue->syncobj_kbase);
+
+}
+
 
    return VK_SUCCESS;
 }
