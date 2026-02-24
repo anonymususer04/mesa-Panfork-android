@@ -1500,9 +1500,10 @@ kbase_cs_wait(kbase k, struct kbase_cs *cs, uint64_t extract_offset,
         uint64_t e = CS_READ_REGISTER(cs, CS_EXTRACT);
         unsigned a = CS_READ_REGISTER(cs, CS_ACTIVE);
 
-        fprintf(stderr, "CSI %i CS_EXTRACT (%"PRIu64") != %"PRIu64", "
-                "CS_ACTIVE (%i)\n",
-                cs->csi, e, extract_offset, a);
+//fix spam 
+   //fprintf(stderr, "CSI %i CS_EXTRACT (%"PRIu64") != %"PRIu64", "
+//                "CS_ACTIVE (%i)\n",
+//                cs->csi, e, extract_offset, a);
 
         fprintf(stderr, "fences:\n");
         list_for_each_entry(struct kbase_fence, fence, &o->fences, link) {
