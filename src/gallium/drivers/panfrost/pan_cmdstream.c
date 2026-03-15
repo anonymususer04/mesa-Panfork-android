@@ -3954,8 +3954,9 @@ panfrost_emit_malloc_vertex(struct panfrost_batch *batch,
 
                 panfrost_emit_shader(batch, &cfg, PIPE_SHADER_VERTEX, vs_ptr,
                                      batch->tls.gpu);
+        }
 
-                pan_section_pack_cs_v10(job, &batch->cs_vertex, MALLOC_VERTEX_JOB, VARYING, vary) {
+        pan_section_pack_cs_v10(job, &batch->cs_vertex, MALLOC_VERTEX_JOB, VARYING, vary) {
                         /* If a varying shader is used, we configure it with the same
                          * state as the position shader for backwards compatible
                          * behaviour with Bifrost. This could be optimized.
@@ -3965,10 +3966,10 @@ panfrost_emit_malloc_vertex(struct panfrost_batch *batch,
                         mali_ptr ptr = batch->rsd[PIPE_SHADER_VERTEX] +
                                 (2 * pan_size(SHADER_PROGRAM));
 
-                        vary.shader = ptr;
+                        panfrost_emit_shader(batch, &vary, PIPE_SHADER_VERTEX,
+                             ptr, batch->tls.gpu);
 
-                        // TODO: Fix this function for v9!
-                }
+                        // TODO: Fixing this function for v9!
         }
 }
 #endif

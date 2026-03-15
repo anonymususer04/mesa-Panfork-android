@@ -851,7 +851,7 @@ kbase_syncobj_update(kbase k, struct kbase_syncobj *o)
         list_for_each_entry_safe(struct kbase_fence, fence, &o->fences, link) {
                 uint64_t value = k->event_slots[fence->slot].last;
 
-                if (value > fence->value) {
+                if (value >= fence->value) {
                         LOG("syncobj %p slot %u value %"PRIu64" vs %"PRIu64"\n",
                             o, fence->slot, fence->value, value);
 
@@ -952,6 +952,7 @@ kbase_handle_events(kbase k)
                 }
                 util_dynarray_fini(handles);
 
+                
                 pthread_mutex_unlock(&k->handle_lock);
         }
 
